@@ -10,6 +10,7 @@ import os
 import re
 import io
 import csv
+import time
 import json
 import base64
 import urllib.request
@@ -165,17 +166,20 @@ def call_gemini_api(
     model: str = "gemini-3.6-flash"
 ) -> Dict[str, Any]:
     """
-    呼叫 Google Gemini 3.6 Flash API 進行多模態文件辨識
-    支援傳入 API Key 或從環境變數 GEMINI_API_KEY 讀取
+    呼叫 Google Gemini API 進行多模態文件辨識
+    具備自動重試 (Exponential Backoff) 與多模型容災備援 (Fallback) 機制
     """
     key = api_key or os.environ.get("GEMINI_API_KEY", "").strip()
     if not key:
         raise ValueError("缺少 Google Gemini API 金鑰 (GEMINI_API_KEY)，請在網頁設定中輸入或於環境變數中設定。")
         
-    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
-    
+    # 候選備援模型順序（優先使用所選模型，若遇 503 尖峰自動切換至備援模型）
+    candidates_models = [model]
+    for backup in ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.0-flash"]:
+        if backup not in candidates_models:
+            candidates_models.append(backup)
+            
     b64_data = base64.b64encode(file_bytes).decode("utf-8")
-    
     prompt_text = GEMINI_PROMPT
     if filename:
         prompt_text = f"檔案名稱參考：{filename}\n\n" + prompt_text
@@ -199,41 +203,68 @@ def call_gemini_api(
             "temperature": 0.1
         }
     }
-    
     data_json = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        endpoint,
-        data=data_json,
-        headers={"Content-Type": "application/json"}
-    )
     
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            resp_body = resp.read().decode("utf-8")
-            result = json.loads(resp_body)
-    except urllib.error.HTTPError as e:
-        err_msg = e.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"Gemini API 請求失敗 (HTTP {e.code}): {err_msg}")
-    except Exception as e:
-        raise RuntimeError(f"Gemini API 連線失敗: {str(e)}")
+    last_err = ""
+    for target_model in candidates_models:
+        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={key}"
         
-    # 解析 Gemini 回傳之文字內容
-    try:
-        candidates = result.get("candidates", [])
-        if not candidates:
-            raise ValueError("Gemini 未回傳任何候選結果。")
-        content_part = candidates[0]["content"]["parts"][0]["text"]
-        
-        # 移除非 JSON 標記 (如 markdown ```json ... ```)
-        cleaned_text = content_part.strip()
-        if cleaned_text.startswith("```"):
-            cleaned_text = re.sub(r"^```(?:json)?\s*", "", cleaned_text)
-            cleaned_text = re.sub(r"\s*```$", "", cleaned_text)
-            
-        parsed_data = json.loads(cleaned_text)
-        return parsed_data
-    except Exception as e:
-        raise ValueError(f"無法解析 Gemini 回傳之 JSON 資料: {str(e)}\n原始回傳內容: {resp_body[:500]}")
+        # 每個模型最多重試 2 次 (針對 503 尖峰與 429 暫態限流)
+        max_retries = 2
+        for attempt in range(max_retries):
+            req = urllib.request.Request(
+                endpoint,
+                data=data_json,
+                headers={"Content-Type": "application/json"}
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    resp_body = resp.read().decode("utf-8")
+                    result = json.loads(resp_body)
+                    
+                # 成功取得回應，解析 JSON
+                candidates = result.get("candidates", [])
+                if not candidates:
+                    raise ValueError(f"Gemini ({target_model}) 未回傳任何候選結果。")
+                content_part = candidates[0]["content"]["parts"][0]["text"]
+                cleaned_text = content_part.strip()
+                if cleaned_text.startswith("```"):
+                    cleaned_text = re.sub(r"^```(?:json)?\s*", "", cleaned_text)
+                    cleaned_text = re.sub(r"\s*```$", "", cleaned_text)
+                    
+                parsed_data = json.loads(cleaned_text)
+                parsed_data["_model_used"] = target_model
+                return parsed_data
+                
+            except urllib.error.HTTPError as e:
+                err_msg = e.read().decode("utf-8", errors="ignore")
+                last_err = f"HTTP {e.code} ({target_model}): {err_msg}"
+                
+                # 若為 503 (負載過高/暫時無法使用) 或 429 (請求頻率受限)
+                if e.code in [503, 429]:
+                    if attempt < max_retries - 1:
+                        # 稍微暫停後重試
+                        time.sleep(1.2 * (attempt + 1))
+                        continue
+                    else:
+                        # 該模型重試完畢仍失敗，跳往下一備援模型
+                        print(f"⚠️ 模型 {target_model} 遇到尖峰 ({e.code})，自動切換至備援模型...")
+                        break
+                elif e.code == 404:
+                    # 模型名稱不存在，跳往下一備援模型
+                    break
+                else:
+                    # 400 (例如 API Key 錯誤) 則不重試，直接報錯
+                    raise RuntimeError(f"Gemini API 請求失敗 (HTTP {e.code}): {err_msg}")
+                    
+            except Exception as e:
+                last_err = str(e)
+                if attempt < max_retries - 1:
+                    time.sleep(1.0)
+                    continue
+                break
+                
+    raise RuntimeError(f"Gemini API 所有備援模型均無法連線，最後錯誤：{last_err}")
 
 def convert_gemini_response_to_yamato_records(
     gemini_data: Dict[str, Any], 

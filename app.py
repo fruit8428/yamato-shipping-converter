@@ -282,8 +282,16 @@ td input:focus {
           <input type="password" id="geminiApiKeyInput" class="api-input" placeholder="AIzaSy..." oninput="handleApiKeyChange()">
           <button class="btn btn-outline" style="padding:4px 8px; font-size:11px;" onclick="toggleApiKeyVisibility()" id="btnToggleKey">顯示</button>
         </div>
+        <div style="margin-top: 8px;">
+          <label style="font-size: 11px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">AI 視覺模型核心</label>
+          <select id="geminiModelSelect" onchange="handleModelChange()" style="width: 100%; font-size: 12px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: white;">
+            <option value="gemini-3.6-flash" selected>Gemini 3.6 Flash (預設・最新旗艦)</option>
+            <option value="gemini-2.5-flash">Gemini 2.5 Flash (高穩定推薦)</option>
+            <option value="gemini-2.0-flash">Gemini 2.0 Flash (高速輕量)</option>
+          </select>
+        </div>
         <div style="font-size: 11px; color: var(--text-muted); margin-top: 6px; line-height: 1.4;">
-          預設使用 <b>Gemini 3.6 Flash</b> 模型。<a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: #0284c7; text-decoration: underline;">免費取得金鑰</a>
+          若遇 Google 伺服器 503 尖峰將自動重試並平滑切換備援模型。<a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: #0284c7; text-decoration: underline;">免費取得金鑰</a>
         </div>
       </div>
 
@@ -434,10 +442,32 @@ function getApiKey() {
   return (localStorage.getItem('yamato_gemini_api_key') || '').trim();
 }
 
+function getSelectedModel() {
+  return localStorage.getItem('yamato_gemini_model') || 'gemini-3.6-flash';
+}
+
+function handleModelChange() {
+  const sel = document.getElementById('geminiModelSelect');
+  if (!sel) return;
+  const m = sel.value;
+  localStorage.setItem('yamato_gemini_model', m);
+  const badge = document.getElementById('engineBadge');
+  if (badge) {
+    if (m === 'gemini-3.6-flash') badge.textContent = "✨ Google Gemini 3.6 Flash API";
+    else if (m === 'gemini-2.5-flash') badge.textContent = "✨ Google Gemini 2.5 Flash API";
+    else badge.textContent = `✨ ${m}`;
+  }
+}
+
 function loadSavedApiKey() {
   const saved = getApiKey();
   if (saved) {
     document.getElementById('geminiApiKeyInput').value = saved;
+  }
+  const savedModel = getSelectedModel();
+  if (savedModel && document.getElementById('geminiModelSelect')) {
+    document.getElementById('geminiModelSelect').value = savedModel;
+    handleModelChange();
   }
   updateApiStatusUI();
 }
@@ -638,6 +668,7 @@ function uploadAndRecognizeFiles(files) {
   if (apiKey) {
     headers['X-Gemini-API-Key'] = apiKey;
   }
+  headers['X-Gemini-Model'] = getSelectedModel();
 
   fetch('/api/upload', { 
     method: 'POST', 
@@ -669,9 +700,12 @@ function uploadAndRecognizeFiles(files) {
 // 辨識當前目錄中指定的個別檔案
 function recognizeSingleFile(filename) {
   const apiKey = getApiKey();
-  showLoading(true, `正在辨識檔案：${filename}...`, "透過 Gemini 3.6 Flash 辨識");
+  showLoading(true, `正在辨識檔案：${filename}...`, "透過 Gemini 辨識");
   
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = { 
+    'Content-Type': 'application/json',
+    'X-Gemini-Model': getSelectedModel()
+  };
   if (apiKey) headers['X-Gemini-API-Key'] = apiKey;
 
   fetch('/api/process_file', {
@@ -702,7 +736,9 @@ function recognizeAllFiles() {
   const apiKey = getApiKey();
   showLoading(true, "正在批次辨識目錄中所有檔案...", "多模態解析所有文件");
   
-  const headers = {};
+  const headers = {
+    'X-Gemini-Model': getSelectedModel()
+  };
   if (apiKey) headers['X-Gemini-API-Key'] = apiKey;
 
   fetch('/api/process_all', { method: 'POST', headers: headers })
@@ -938,6 +974,10 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
             key = os.environ.get("GEMINI_API_KEY", "").strip()
         return key
 
+    def get_model(self):
+        """取得請求中指定的模型或預設模型"""
+        return self.headers.get("X-Gemini-Model", "").strip() or "gemini-3.6-flash"
+
     def get_route_path(self):
         """解析真實路由路徑，支援本機直連與 Vercel Rewrite"""
         url_parts = urllib.parse.urlparse(self.path)
@@ -1020,6 +1060,7 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
         path = self.get_route_path()
         cdir = get_current_dir()
         api_key = self.get_api_key()
+        model = self.get_model()
         
         if path == "/api/set_current_dir":
             try:
@@ -1092,7 +1133,8 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
                         file_bytes=file_bytes,
                         mime_type=mime_type,
                         filename=target_path.name,
-                        api_key=api_key
+                        api_key=api_key,
+                        model=model
                     )
                     records = gemini_converter.convert_gemini_response_to_yamato_records(
                         gemini_data, 
@@ -1127,7 +1169,7 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
                         with open(f, "rb") as fp:
                             fb = fp.read()
                         mt = gemini_converter.get_mime_type(f.name, fb)
-                        gdata = gemini_converter.call_gemini_api(fb, mt, filename=f.name, api_key=api_key)
+                        gdata = gemini_converter.call_gemini_api(fb, mt, filename=f.name, api_key=api_key, model=model)
                         recs = gemini_converter.convert_gemini_response_to_yamato_records(gdata, filename=f.name)
                         records.extend(recs)
                 self.send_json({"records": records})
@@ -1237,7 +1279,8 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
                             file_bytes=file_bytes,
                             mime_type=mime_type,
                             filename=clean_fname,
-                            api_key=api_key
+                            api_key=api_key,
+                            model=model
                         )
                         recs = gemini_converter.convert_gemini_response_to_yamato_records(
                             gdata,
