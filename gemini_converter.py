@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Google Gemini 2.5 Flash API 辨識模組
+Google Gemini 3.6 Flash API 辨識模組
 專為黑貓宅急便出貨單設計，支援 PDF、JPG、PNG、WEBP、HEIC
 雲端伺服器 (Vercel Serverless) 與跨平台 (Windows / Mac / Linux) 均可無縫執行
 """
@@ -162,10 +162,10 @@ def call_gemini_api(
     mime_type: str, 
     filename: str = "", 
     api_key: Optional[str] = None,
-    model: str = "gemini-2.5-flash"
+    model: str = "gemini-3.6-flash"
 ) -> Dict[str, Any]:
     """
-    呼叫 Google Gemini 2.5 Flash API 進行多模態文件辨識
+    呼叫 Google Gemini 3.6 Flash API 進行多模態文件辨識
     支援傳入 API Key 或從環境變數 GEMINI_API_KEY 讀取
     """
     key = api_key or os.environ.get("GEMINI_API_KEY", "").strip()

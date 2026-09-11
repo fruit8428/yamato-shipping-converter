@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 黑貓宅急便出貨單自動轉換系統 - Web 視覺化操作介面
-支援 Google Gemini 2.5 Flash 雲端多模態 AI 辨識 與 macOS 原生 Vision OCR 雙引擎
+支援 Google Gemini 3.6 Flash 雲端多模態 AI 辨識 與 macOS 原生 Vision OCR 雙引擎
 可於本機直接執行，亦可無縫部署至 Vercel Serverless
 """
 
@@ -245,7 +245,7 @@ td input:focus {
 <div id="loading-overlay">
   <div class="spinner"></div>
   <div style="font-size: 18px; font-weight: 700;" id="loadingText">正在處理中...</div>
-  <div style="font-size: 13px; opacity: 0.85; margin-top: 6px;" id="loadingSubtext">透過 Google Gemini 2.5 Flash 進行多模態高精度辨識</div>
+  <div style="font-size: 13px; opacity: 0.85; margin-top: 6px;" id="loadingSubtext">透過 Google Gemini 3.6 Flash 進行多模態高精度辨識</div>
 </div>
 
 <div class="container">
@@ -255,7 +255,7 @@ td input:focus {
       <div class="brand-title">
         <h1>
           黑貓宅急便出貨單自動轉換系統
-          <span class="engine-badge" id="engineBadge">✨ Google Gemini 2.5 Flash API</span>
+          <span class="engine-badge" id="engineBadge">✨ Google Gemini 3.6 Flash API</span>
         </h1>
         <p>都匯水果專用版 ｜ 支援 PDF、JPG、PNG、LINE 截圖辨識並一鍵匯出黑貓 27 欄標準 CSV</p>
       </div>
@@ -283,7 +283,7 @@ td input:focus {
           <button class="btn btn-outline" style="padding:4px 8px; font-size:11px;" onclick="toggleApiKeyVisibility()" id="btnToggleKey">顯示</button>
         </div>
         <div style="font-size: 11px; color: var(--text-muted); margin-top: 6px; line-height: 1.4;">
-          預設使用 <b>Gemini 2.5 Flash</b> 模型。<a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: #0284c7; text-decoration: underline;">免費取得金鑰</a>
+          預設使用 <b>Gemini 3.6 Flash</b> 模型。<a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: #0284c7; text-decoration: underline;">免費取得金鑰</a>
         </div>
       </div>
 
@@ -632,7 +632,7 @@ function uploadAndRecognizeFiles(files) {
     formData.append('files', f);
   }
 
-  showLoading(true, "正在使用 Google Gemini 2.5 Flash 辨識...", "多模態視覺模型深度解析收件地址與訂單數量");
+  showLoading(true, "正在使用 Google Gemini 3.6 Flash 辨識...", "多模態視覺模型深度解析收件地址與訂單數量");
   
   const headers = {};
   if (apiKey) {
@@ -669,7 +669,7 @@ function uploadAndRecognizeFiles(files) {
 // 辨識當前目錄中指定的個別檔案
 function recognizeSingleFile(filename) {
   const apiKey = getApiKey();
-  showLoading(true, `正在辨識檔案：${filename}...`, "透過 Gemini 2.5 Flash 辨識");
+  showLoading(true, `正在辨識檔案：${filename}...`, "透過 Gemini 3.6 Flash 辨識");
   
   const headers = { 'Content-Type': 'application/json' };
   if (apiKey) headers['X-Gemini-API-Key'] = apiKey;
@@ -912,7 +912,7 @@ function showLoading(show, title, subtext) {
   const overlay = document.getElementById('loading-overlay');
   if (show) {
     document.getElementById('loadingText').textContent = title || "正在處理中...";
-    document.getElementById('loadingSubtext').textContent = subtext || "透過 Google Gemini 2.5 Flash 進行多模態辨識";
+    document.getElementById('loadingSubtext').textContent = subtext || "透過 Google Gemini 3.6 Flash 進行多模態辨識";
     overlay.style.display = 'flex';
   } else {
     overlay.style.display = 'none';
@@ -1083,7 +1083,7 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
                     self.send_json({"error": "檔案不存在"}, status=404)
                     return
                 
-                # 優先使用 Gemini 2.5 Flash
+                # 優先使用 Gemini 3.6 Flash
                 if api_key:
                     with open(target_path, "rb") as f:
                         file_bytes = f.read()
@@ -1174,7 +1174,7 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
             return
             
         elif path == "/api/upload":
-            # 接收上傳之檔案並使用 Gemini 2.5 Flash 或原生 OCR 進行辨識
+            # 接收上傳之檔案並使用 Gemini 3.6 Flash 或原生 OCR 進行辨識
             try:
                 content_type = self.headers.get('Content-Type', '')
                 if 'multipart/form-data' not in content_type:
@@ -1230,7 +1230,7 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
 
                 # 辨識處理
                 if api_key:
-                    # 使用 Google Gemini 2.5 Flash API
+                    # 使用 Google Gemini 3.6 Flash API
                     for clean_fname, file_bytes in uploaded_files:
                         mime_type = gemini_converter.get_mime_type(clean_fname, file_bytes)
                         gdata = gemini_converter.call_gemini_api(
@@ -1295,7 +1295,7 @@ def run_server():
     print(f"🚀 黑貓宅急便出貨單轉換系統已啟動！")
     print(f"🌐 本機操作網址：http://localhost:{PORT}")
     print(f"📁 當前工作目錄：{get_current_dir()}")
-    print(f"✨ 辨識引擎支援：Google Gemini 2.5 Flash API" + (" / macOS 原生 Vision" if HAS_LOCAL_OCR else ""))
+    print(f"✨ 辨識引擎支援：Google Gemini 3.6 Flash API" + (" / macOS 原生 Vision" if HAS_LOCAL_OCR else ""))
     print("=" * 60)
     try:
         httpd.serve_forever()
