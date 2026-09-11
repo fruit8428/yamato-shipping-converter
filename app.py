@@ -272,26 +272,28 @@ td input:focus {
     <div class="sidebar">
       <!-- Gemini API Key Card -->
       <div class="card api-card">
-        <div class="api-header">
+        <div class="api-header" id="apiHeader">
           <div class="api-title">
             <span>🔑</span> Google Gemini API 金鑰
           </div>
           <span class="api-status" id="apiStatusBadge">檢查中...</span>
         </div>
-        <div class="api-input-wrap">
-          <input type="password" id="geminiApiKeyInput" class="api-input" placeholder="AIzaSy..." oninput="handleApiKeyChange()">
-          <button class="btn btn-outline" style="padding:4px 8px; font-size:11px;" onclick="toggleApiKeyVisibility()" id="btnToggleKey">顯示</button>
-        </div>
-        <div style="margin-top: 8px;">
-          <label style="font-size: 11px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">AI 視覺模型核心</label>
-          <select id="geminiModelSelect" onchange="handleModelChange()" style="width: 100%; font-size: 12px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: white;">
-            <option value="gemini-3.6-flash" selected>Gemini 3.6 Flash (預設・最新旗艦)</option>
-            <option value="gemini-2.5-flash">Gemini 2.5 Flash (高穩定推薦)</option>
-            <option value="gemini-2.0-flash">Gemini 2.0 Flash (高速輕量)</option>
-          </select>
-        </div>
-        <div style="font-size: 11px; color: var(--text-muted); margin-top: 6px; line-height: 1.4;">
-          若遇 Google 伺服器 503 尖峰將自動重試並平滑切換備援模型。<a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: #0284c7; text-decoration: underline;">免費取得金鑰</a>
+        <div id="apiKeyDetails">
+          <div class="api-input-wrap">
+            <input type="password" id="geminiApiKeyInput" class="api-input" placeholder="AIzaSy..." oninput="handleApiKeyChange()">
+            <button class="btn btn-outline" style="padding:4px 8px; font-size:11px;" onclick="toggleApiKeyVisibility()" id="btnToggleKey">顯示</button>
+          </div>
+          <div style="margin-top: 8px;">
+            <label style="font-size: 11px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">AI 視覺模型核心</label>
+            <select id="geminiModelSelect" onchange="handleModelChange()" style="width: 100%; font-size: 12px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); background: white;">
+              <option value="gemini-3.6-flash" selected>Gemini 3.6 Flash (預設・最新旗艦)</option>
+              <option value="gemini-2.5-flash">Gemini 2.5 Flash (高穩定推薦)</option>
+              <option value="gemini-2.0-flash">Gemini 2.0 Flash (高速輕量)</option>
+            </select>
+          </div>
+          <div style="font-size: 11px; color: var(--text-muted); margin-top: 6px; line-height: 1.4;">
+            若遇 Google 伺服器 503 尖峰將自動重試並平滑切換備援模型。<a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: #0284c7; text-decoration: underline;">免費取得金鑰</a>
+          </div>
         </div>
       </div>
 
@@ -569,19 +571,27 @@ function toggleApiKeyVisibility() {
 
 function updateApiStatusUI() {
   const badge = document.getElementById('apiStatusBadge');
+  const details = document.getElementById('apiKeyDetails');
+  const header = document.getElementById('apiHeader');
   const key = getApiKey();
   if (serverHasEnvKey) {
     badge.textContent = "🟢 雲端金鑰已配置";
     badge.className = "api-status ready";
-    badge.title = "已從伺服器環境變數 GEMINI_API_KEY 取得金鑰";
+    badge.title = "已從伺服器環境變數 GEMINI_API_KEY 取得金鑰，免手動輸入";
+    if (details) details.style.display = 'none';
+    if (header) header.style.marginBottom = '0';
   } else if (key) {
     badge.textContent = "🟢 本地金鑰已就緒";
     badge.className = "api-status ready";
     badge.title = "已從瀏覽器儲存區讀取金鑰";
+    if (details) details.style.display = 'block';
+    if (header) header.style.marginBottom = '8px';
   } else {
     badge.textContent = "🟡 請設定金鑰";
     badge.className = "api-status missing";
     badge.title = "尚未設定 Google Gemini API 金鑰";
+    if (details) details.style.display = 'block';
+    if (header) header.style.marginBottom = '8px';
   }
 }
 
