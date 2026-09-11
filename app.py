@@ -529,7 +529,7 @@ function applyConfigToAllOrders() {
   const cfg = getConfig();
   handleConfigChange();
   if (currentOrders.length === 0) {
-    alert('已儲存設定！後續辨識之出貨單將預設使用此組參數：\n溫層: ' + cfg['溫層'] + '、尺寸: ' + cfg['尺寸'] + '、配達時段: ' + cfg['希望配達時間'] + '、品名: ' + cfg['品名說明']);
+    alert('已儲存設定！後續辨識之出貨單將預設使用此組參數：\\n溫層: ' + cfg['溫層'] + '、尺寸: ' + cfg['尺寸'] + '、配達時段: ' + cfg['希望配達時間'] + '、品名: ' + cfg['品名說明']);
     return;
   }
   for (let r of currentOrders) {
@@ -542,7 +542,7 @@ function applyConfigToAllOrders() {
     r['品名說明'] = cfg['品名說明'];
   }
   renderTable();
-  alert(`✅ 已成功將出貨參數套用至目前全部 ${currentOrders.length} 筆訂單！\n溫層：${cfg['溫層']}\n包裹尺寸：${cfg['尺寸']}\n配達時段：${cfg['希望配達時間']}\n品名說明：${cfg['品名說明']}`);
+  alert(`✅ 已成功將出貨參數套用至目前全部 ${currentOrders.length} 筆訂單！\\n溫層：${cfg['溫層']}\\n包裹尺寸：${cfg['尺寸']}\\n配達時段：${cfg['希望配達時間']}\\n品名說明：${cfg['品名說明']}`);
 }
 
 function handleApiKeyChange() {
