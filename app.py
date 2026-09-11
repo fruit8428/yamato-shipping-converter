@@ -253,10 +253,7 @@ td input:focus {
     <div class="brand">
       <div class="brand-logo">🐱</div>
       <div class="brand-title">
-        <h1>
-          黑貓宅急便出貨單自動轉換系統
-          <span class="engine-badge" id="engineBadge">✨ Google Gemini 3.6 Flash API</span>
-        </h1>
+        <h1>黑貓宅急便出貨單自動轉換系統</h1>
         <p>都匯水果專用版 ｜ 支援 PDF、JPG、PNG、LINE 截圖辨識並一鍵匯出黑貓 27 欄標準 CSV</p>
       </div>
     </div>
