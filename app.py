@@ -938,12 +938,26 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
             key = os.environ.get("GEMINI_API_KEY", "").strip()
         return key
 
-    def do_GET(self):
+    def get_route_path(self):
+        """解析真實路由路徑，支援本機直連與 Vercel Rewrite"""
         url_parts = urllib.parse.urlparse(self.path)
-        path = url_parts.path
+        qs = urllib.parse.parse_qs(url_parts.query)
+        route = qs.get("__route__", [""])[0]
+        if not route:
+            route = self.headers.get("x-matched-path", "")
+        if not route:
+            route = url_parts.path
+        if route.startswith("//"):
+            route = "/" + route.lstrip("/")
+        if len(route) > 1 and route.endswith('/'):
+            route = route[:-1]
+        return route
+
+    def do_GET(self):
+        path = self.get_route_path()
         cdir = get_current_dir()
         
-        if path == "/" or path == "/index.html":
+        if path in ["", "/", "/index.html", "/api", "/api/index"]:
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
@@ -1003,8 +1017,7 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
         self.send_error(404, "Not Found")
 
     def do_POST(self):
-        url_parts = urllib.parse.urlparse(self.path)
-        path = url_parts.path
+        path = self.get_route_path()
         cdir = get_current_dir()
         api_key = self.get_api_key()
         
