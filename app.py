@@ -442,12 +442,18 @@ let isCloudEnv = false;
 let serverHasEnvKey = false;
 
 // 初始化
-window.onload = function() {
+function initApp() {
   loadSavedApiKey();
   loadSavedConfig();
   loadCurrentDir();
   renderTable();
-};
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initApp);
+} else {
+  initApp();
+}
 
 function getApiKey() {
   return (localStorage.getItem('yamato_gemini_api_key') || '').trim();
