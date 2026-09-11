@@ -357,6 +357,13 @@ def export_records_to_csv_text(records: List[Dict[str, Any]], start_order_idx: i
     rows = []
     for idx, r in enumerate(records, start=start_order_idx):
         order_no = r.get('訂單編號') or f"ORD{datetime.now().strftime('%Y%m%d')}-{idx:03d}"
+        # 優先順序：單筆個別設定 -> 批次自訂預設 -> 系統預設
+        temp_val = str(r.get('溫層(詳參數表)') or r.get('溫層') or cfg.get('溫層', '2')).strip()
+        size_val = str(r.get('尺寸(詳參數表)') or r.get('尺寸') or cfg.get('尺寸', '2')).strip()
+        time_val = str(r.get('希望配達時間(詳參數表)') or r.get('希望配達時間') or cfg.get('希望配達時間', '1')).strip()
+        desc_val = str(r.get('品名說明') or cfg.get('品名說明', '生鮮水果禮盒')).strip()
+        item_code = str(r.get('品名(詳參數表)') or r.get('品名代號') or cfg.get('品名代號', '2')).strip()
+
         row = {
             "收件人姓名": r.get('收件人姓名', ''),
             "收件人電話": r.get('收件人電話', ''),
@@ -364,20 +371,20 @@ def export_records_to_csv_text(records: List[Dict[str, Any]], start_order_idx: i
             "收件人地址": r.get('收件人地址', ''),
             "代收金額或到付": r.get('代收金額或到付', ''),
             "件數": r.get('件數', 1),
-            "品名(詳參數表)": r.get('品名(詳參數表)', cfg.get('品名代號', '2')),
+            "品名(詳參數表)": item_code,
             "備註": r.get('備註', ''),
             "訂單編號": order_no,
-            "希望配達時間(詳參數表)": r.get('希望配達時間(詳參數表)', cfg.get('希望配達時間', '1')),
-            "出貨日期(YYYY/MM/DD)": r.get('出貨日期(YYYY/MM/DD)', ''),
-            "預定配達日期(YYYY/MM/DD)": r.get('預定配達日期(YYYY/MM/DD)', ''),
-            "溫層(詳參數表)": r.get('溫層(詳參數表)', cfg.get('溫層', '2')),
-            "尺寸(詳參數表)": r.get('尺寸(詳參數表)', cfg.get('尺寸', '2')),
+            "希望配達時間(詳參數表)": time_val,
+            "出貨日期(YYYY/MM/DD)": r.get('出貨日期(YYYY/MM/DD)', '') or r.get('出貨日期', ''),
+            "預定配達日期(YYYY/MM/DD)": r.get('預定配達日期(YYYY/MM/DD)', '') or r.get('預定配達日期', ''),
+            "溫層(詳參數表)": temp_val,
+            "尺寸(詳參數表)": size_val,
             "寄件人姓名": r.get('寄件人姓名', ''),
             "寄件人電話": r.get('寄件人電話', ''),
             "寄件人手機": r.get('寄件人手機', ''),
             "寄件人地址": r.get('寄件人地址', ''),
             "保值金額(20001~10萬之間)-會產生額外費用": r.get('保值金額(20001~10萬之間)-會產生額外費用', ''),
-            "品名說明": r.get('品名說明', cfg.get('品名說明', '水果禮盒')),
+            "品名說明": desc_val,
             "是否列印(Y/N)": r.get('是否列印(Y/N)', ''),
             "是否捐贈(Y/N)": r.get('是否捐贈(Y/N)', ''),
             "統一編號": r.get('統一編號', ''),

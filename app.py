@@ -336,10 +336,13 @@ td input:focus {
         </div>
 
         <div class="settings-group">
-          <h3>黑貓出貨預設參數</h3>
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+            <h3 style="margin: 0;">黑貓出貨預設參數</h3>
+            <span id="cfgSaveBadge" style="font-size: 11px; color: #10b981; font-weight: 700; display: none;">✓ 已儲存</span>
+          </div>
           <div class="field-row">
             <label>溫層規格 (詳參數表)</label>
-            <select id="cfg-temp">
+            <select id="cfg-temp" onchange="handleConfigChange()">
               <option value="2" selected>2 - 冷藏 (水果生鮮)</option>
               <option value="1">1 - 常溫</option>
               <option value="3">3 - 冷凍</option>
@@ -347,7 +350,7 @@ td input:focus {
           </div>
           <div class="field-row">
             <label>包裹尺寸 (詳參數表)</label>
-            <select id="cfg-size">
+            <select id="cfg-size" onchange="handleConfigChange()">
               <option value="2" selected>2 - 90 公分以下 (標準果盒)</option>
               <option value="1">1 - 60 公分以下</option>
               <option value="3">3 - 120 公分以下</option>
@@ -356,7 +359,7 @@ td input:focus {
           </div>
           <div class="field-row">
             <label>希望配達時段</label>
-            <select id="cfg-time">
+            <select id="cfg-time" onchange="handleConfigChange()">
               <option value="1" selected>1 - 不指定</option>
               <option value="2">2 - 13點前</option>
               <option value="3">3 - 14~18點</option>
@@ -364,8 +367,11 @@ td input:focus {
           </div>
           <div class="field-row">
             <label>品名說明</label>
-            <input type="text" id="cfg-item-desc" value="生鮮水果禮盒">
+            <input type="text" id="cfg-item-desc" value="生鮮水果禮盒" oninput="handleConfigChange()">
           </div>
+          <button class="btn btn-outline" style="width: 100%; font-size: 12px; justify-content: center; margin-top: 6px; padding: 7px 10px; font-weight: 700; color: var(--primary); border-color: var(--primary);" onclick="applyConfigToAllOrders()" title="將上方所選溫層、尺寸、時段與品名一次套用至畫面中所有訂單">
+            ⚡ 套用至目前清單全部訂單
+          </button>
         </div>
       </div>
 
@@ -401,6 +407,10 @@ td input:focus {
                 <th class="th-tel">收件人市話 (含分機)</th>
                 <th class="th-addr">收件人完整地址</th>
                 <th class="th-qty">件數</th>
+                <th style="min-width: 105px;">溫層規格</th>
+                <th style="min-width: 130px;">包裹尺寸</th>
+                <th style="min-width: 110px;">配達時段</th>
+                <th style="min-width: 140px;">品名說明</th>
                 <th class="th-sender">寄件人姓名</th>
                 <th class="th-sender-mobile">寄件人手機</th>
                 <th class="th-remark">備註說明</th>
@@ -410,7 +420,7 @@ td input:focus {
             </thead>
             <tbody id="ordersTbody">
               <tr>
-                <td colspan="11" style="text-align: center; padding: 80px 20px; color: var(--text-muted);">
+                <td colspan="15" style="text-align: center; padding: 80px 20px; color: var(--text-muted);">
                   <div style="font-size: 40px; margin-bottom: 12px;">📥</div>
                   <div style="font-size: 16px; font-weight: 700; color: #334155;">清單目前為空</div>
                   <div style="font-size: 13px; margin-top: 6px; color: #64748b;">請將客戶的 PDF、訂單截圖或照片拖曳至左側上傳區，系統將自動進行多模態 AI 辨識</div>
@@ -434,6 +444,7 @@ let serverHasEnvKey = false;
 // 初始化
 window.onload = function() {
   loadSavedApiKey();
+  loadSavedConfig();
   loadCurrentDir();
   renderTable();
 };
@@ -470,6 +481,62 @@ function loadSavedApiKey() {
     handleModelChange();
   }
   updateApiStatusUI();
+}
+
+function getConfig() {
+  return {
+    '溫層': document.getElementById('cfg-temp').value,
+    '尺寸': document.getElementById('cfg-size').value,
+    '希望配達時間': document.getElementById('cfg-time').value,
+    '品名說明': (document.getElementById('cfg-item-desc').value || '').trim() || '生鮮水果禮盒',
+    '品名代號': '2',
+    '可刷卡': 'N',
+    '手機支付': 'N'
+  };
+}
+
+function handleConfigChange() {
+  const cfg = getConfig();
+  localStorage.setItem('yamato_default_config', JSON.stringify(cfg));
+  const badge = document.getElementById('cfgSaveBadge');
+  if (badge) {
+    badge.style.display = 'inline';
+    clearTimeout(window._cfgTimeout);
+    window._cfgTimeout = setTimeout(() => { badge.style.display = 'none'; }, 2000);
+  }
+}
+
+function loadSavedConfig() {
+  try {
+    const saved = localStorage.getItem('yamato_default_config');
+    if (saved) {
+      const cfg = JSON.parse(saved);
+      if (cfg['溫層'] && document.getElementById('cfg-temp')) document.getElementById('cfg-temp').value = cfg['溫層'];
+      if (cfg['尺寸'] && document.getElementById('cfg-size')) document.getElementById('cfg-size').value = cfg['尺寸'];
+      if (cfg['希望配達時間'] && document.getElementById('cfg-time')) document.getElementById('cfg-time').value = cfg['希望配達時間'];
+      if (cfg['品名說明'] && document.getElementById('cfg-item-desc')) document.getElementById('cfg-item-desc').value = cfg['品名說明'];
+    }
+  } catch(e) {}
+}
+
+function applyConfigToAllOrders() {
+  const cfg = getConfig();
+  handleConfigChange();
+  if (currentOrders.length === 0) {
+    alert('已儲存設定！後續辨識之出貨單將預設使用此組參數：\n溫層: ' + cfg['溫層'] + '、尺寸: ' + cfg['尺寸'] + '、配達時段: ' + cfg['希望配達時間'] + '、品名: ' + cfg['品名說明']);
+    return;
+  }
+  for (let r of currentOrders) {
+    r['溫層(詳參數表)'] = cfg['溫層'];
+    r['溫層'] = cfg['溫層'];
+    r['尺寸(詳參數表)'] = cfg['尺寸'];
+    r['尺寸'] = cfg['尺寸'];
+    r['希望配達時間(詳參數表)'] = cfg['希望配達時間'];
+    r['希望配達時間'] = cfg['希望配達時間'];
+    r['品名說明'] = cfg['品名說明'];
+  }
+  renderTable();
+  alert(`✅ 已成功將出貨參數套用至目前全部 ${currentOrders.length} 筆訂單！\n溫層：${cfg['溫層']}\n包裹尺寸：${cfg['尺寸']}\n配達時段：${cfg['希望配達時間']}\n品名說明：${cfg['品名說明']}`);
 }
 
 function handleApiKeyChange() {
@@ -669,6 +736,7 @@ function uploadAndRecognizeFiles(files) {
     headers['X-Gemini-API-Key'] = apiKey;
   }
   headers['X-Gemini-Model'] = getSelectedModel();
+  headers['X-Yamato-Config'] = encodeURIComponent(JSON.stringify(getConfig()));
 
   fetch('/api/upload', { 
     method: 'POST', 
@@ -704,7 +772,8 @@ function recognizeSingleFile(filename) {
   
   const headers = { 
     'Content-Type': 'application/json',
-    'X-Gemini-Model': getSelectedModel()
+    'X-Gemini-Model': getSelectedModel(),
+    'X-Yamato-Config': encodeURIComponent(JSON.stringify(getConfig()))
   };
   if (apiKey) headers['X-Gemini-API-Key'] = apiKey;
 
@@ -737,7 +806,8 @@ function recognizeAllFiles() {
   showLoading(true, "正在批次辨識目錄中所有檔案...", "多模態解析所有文件");
   
   const headers = {
-    'X-Gemini-Model': getSelectedModel()
+    'X-Gemini-Model': getSelectedModel(),
+    'X-Yamato-Config': encodeURIComponent(JSON.stringify(getConfig()))
   };
   if (apiKey) headers['X-Gemini-API-Key'] = apiKey;
 
@@ -820,7 +890,7 @@ function renderTable() {
     sourceTag.style.display = "none";
     tbody.innerHTML = `
       <tr>
-        <td colspan="11" style="text-align: center; padding: 80px 20px; color: var(--text-muted);">
+        <td colspan="15" style="text-align: center; padding: 80px 20px; color: var(--text-muted);">
           <div style="font-size: 40px; margin-bottom: 12px;">📥</div>
           <div style="font-size: 16px; font-weight: 700; color: #334155;">清單目前為空</div>
           <div style="font-size: 13px; margin-top: 6px; color: #64748b;">請將客戶的 PDF、訂單截圖或照片拖曳至左側上傳區，系統將自動進行多模態 AI 辨識</div>
@@ -839,7 +909,15 @@ function renderTable() {
     sourceTag.style.display = "none";
   }
 
-  tbody.innerHTML = currentOrders.map((r, i) => `
+  const sysCfg = getConfig();
+
+  tbody.innerHTML = currentOrders.map((r, i) => {
+    const curTemp = String(r['溫層(詳參數表)'] || r['溫層'] || sysCfg['溫層'] || '2');
+    const curSize = String(r['尺寸(詳參數表)'] || r['尺寸'] || sysCfg['尺寸'] || '2');
+    const curTime = String(r['希望配達時間(詳參數表)'] || r['希望配達時間'] || sysCfg['希望配達時間'] || '1');
+    const curDesc = r['品名說明'] || sysCfg['品名說明'] || '生鮮水果禮盒';
+
+    return `
     <tr>
       <td class="col-num">${i + 1}</td>
       <td style="min-width: 250px;"><input type="text" value="${escapeHtml(r.收件人姓名 || '')}" placeholder="姓名/公司" onchange="updateRow(${i}, '收件人姓名', this.value)"></td>
@@ -847,13 +925,39 @@ function renderTable() {
       <td style="min-width: 170px;"><input type="text" value="${escapeHtml((r.收件人電話 || '').replace("'", ''))}" placeholder="02xxxxxxx#分機" onchange="updateRow(${i}, '收件人電話', this.value)"></td>
       <td style="min-width: 440px;"><input type="text" value="${escapeHtml(r.收件人地址 || '')}" placeholder="完整配送地址" onchange="updateRow(${i}, '收件人地址', this.value)"></td>
       <td style="width: 65px; min-width: 65px;"><input type="number" min="1" style="text-align:center; font-weight:600;" value="${r.件數 || 1}" onchange="updateRow(${i}, '件數', parseInt(this.value)||1)"></td>
+      <td style="min-width: 105px;">
+        <select onchange="updateRow(${i}, '溫層(詳參數表)', this.value)" style="padding: 4px 6px; font-size: 12px; border: 1px solid #cbd5e1; border-radius: 4px;">
+          <option value="2" ${curTemp === '2' ? 'selected' : ''}>2-冷藏</option>
+          <option value="1" ${curTemp === '1' ? 'selected' : ''}>1-常溫</option>
+          <option value="3" ${curTemp === '3' ? 'selected' : ''}>3-冷凍</option>
+        </select>
+      </td>
+      <td style="min-width: 130px;">
+        <select onchange="updateRow(${i}, '尺寸(詳參數表)', this.value)" style="padding: 4px 6px; font-size: 12px; border: 1px solid #cbd5e1; border-radius: 4px;">
+          <option value="2" ${curSize === '2' ? 'selected' : ''}>2-90cm以下</option>
+          <option value="1" ${curSize === '1' ? 'selected' : ''}>1-60cm以下</option>
+          <option value="3" ${curSize === '3' ? 'selected' : ''}>3-120cm以下</option>
+          <option value="4" ${curSize === '4' ? 'selected' : ''}>4-150cm以下</option>
+        </select>
+      </td>
+      <td style="min-width: 110px;">
+        <select onchange="updateRow(${i}, '希望配達時間(詳參數表)', this.value)" style="padding: 4px 6px; font-size: 12px; border: 1px solid #cbd5e1; border-radius: 4px;">
+          <option value="1" ${curTime === '1' ? 'selected' : ''}>1-不指定</option>
+          <option value="2" ${curTime === '2' ? 'selected' : ''}>2-13點前</option>
+          <option value="3" ${curTime === '3' ? 'selected' : ''}>3-14~18點</option>
+        </select>
+      </td>
+      <td style="min-width: 140px;">
+        <input type="text" value="${escapeHtml(curDesc)}" placeholder="品名說明" onchange="updateRow(${i}, '品名說明', this.value)">
+      </td>
       <td style="min-width: 140px;"><input type="text" value="${escapeHtml(r.寄件人姓名 || '')}" placeholder="寄件人" onchange="updateRow(${i}, '寄件人姓名', this.value)"></td>
       <td style="min-width: 140px;"><input type="text" value="${escapeHtml((r.寄件人手機 || '').replace("'", ''))}" placeholder="寄件人電話" onchange="updateRow(${i}, '寄件人手機', this.value)"></td>
       <td style="min-width: 260px;"><input type="text" value="${escapeHtml(r.備註 || '')}" placeholder="備註/分機/禮盒" onchange="updateRow(${i}, '備註', this.value)"></td>
       <td style="min-width: 200px; color:var(--text-muted); font-size:12px;" title="${escapeHtml(r._來源檔案 || '')}">📄 ${escapeHtml(r._來源檔案 || '')}</td>
       <td class="col-del" onclick="deleteRow(${i})" title="刪除此筆訂單">✕</td>
     </tr>
-  `).join('');
+    `;
+  }).join('');
 }
 
 function updateRow(index, key, val) {
@@ -861,6 +965,12 @@ function updateRow(index, key, val) {
     val = val ? ("'" + String(val).replace(/^'+/, '')) : '';
   }
   currentOrders[index][key] = val;
+  if (key === '溫層(詳參數表)') currentOrders[index]['溫層'] = val;
+  if (key === '溫層') currentOrders[index]['溫層(詳參數表)'] = val;
+  if (key === '尺寸(詳參數表)') currentOrders[index]['尺寸'] = val;
+  if (key === '尺寸') currentOrders[index]['尺寸(詳參數表)'] = val;
+  if (key === '希望配達時間(詳參數表)') currentOrders[index]['希望配達時間'] = val;
+  if (key === '希望配達時間') currentOrders[index]['希望配達時間(詳參數表)'] = val;
 }
 
 function deleteRow(index) {
@@ -869,18 +979,25 @@ function deleteRow(index) {
 }
 
 function addNewRow() {
+  const cfg = getConfig();
   currentOrders.push({
     '收件人姓名': '',
     '收件人電話': '',
     '收件人手機': '',
     '收件人地址': '',
     '件數': 1,
+    '溫層(詳參數表)': cfg['溫層'],
+    '溫層': cfg['溫層'],
+    '尺寸(詳參數表)': cfg['尺寸'],
+    '尺寸': cfg['尺寸'],
+    '希望配達時間(詳參數表)': cfg['希望配達時間'],
+    '希望配達時間': cfg['希望配達時間'],
     '寄件人姓名': '',
     '寄件人電話': '',
     '寄件人手機': '',
     '寄件人地址': '',
     '備註': '',
-    '品名說明': document.getElementById('cfg-item-desc').value,
+    '品名說明': cfg['品名說明'],
     '_來源檔案': '手動新增'
   });
   renderTable();
@@ -896,15 +1013,7 @@ function exportCsv() {
   const payload = {
     records: currentOrders,
     source_name: currentSourceFileName,
-    config: {
-      '溫層': document.getElementById('cfg-temp').value,
-      '尺寸': document.getElementById('cfg-size').value,
-      '希望配達時間': document.getElementById('cfg-time').value,
-      '品名說明': document.getElementById('cfg-item-desc').value,
-      '品名代號': '2',
-      '可刷卡': 'N',
-      '手機支付': 'N'
-    }
+    config: getConfig()
   };
 
   showLoading(true, "正在產出黑貓標準 CSV...", "符合 27 欄位規範與 UTF-8 BOM 編碼");
@@ -977,6 +1086,27 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
     def get_model(self):
         """取得請求中指定的模型或預設模型"""
         return self.headers.get("X-Gemini-Model", "").strip() or "gemini-3.6-flash"
+
+    def get_config(self):
+        """取得請求中傳入之黑貓預設參數或預設值"""
+        cfg_hdr = self.headers.get("X-Yamato-Config", "").strip()
+        if cfg_hdr:
+            try:
+                raw_json = urllib.parse.unquote(cfg_hdr)
+                cfg = json.loads(raw_json)
+                if isinstance(cfg, dict):
+                    return cfg
+            except Exception as e:
+                print("解析 X-Yamato-Config 失敗:", e)
+        return {
+            '溫層': '2',
+            '尺寸': '2',
+            '希望配達時間': '1',
+            '品名說明': '生鮮水果禮盒',
+            '品名代號': '2',
+            '可刷卡': 'N',
+            '手機支付': 'N'
+        }
 
     def get_route_path(self):
         """解析真實路由路徑，支援本機直連與 Vercel Rewrite"""
@@ -1061,6 +1191,7 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
         cdir = get_current_dir()
         api_key = self.get_api_key()
         model = self.get_model()
+        user_cfg = self.get_config()
         
         if path == "/api/set_current_dir":
             try:
@@ -1138,7 +1269,8 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
                     )
                     records = gemini_converter.convert_gemini_response_to_yamato_records(
                         gemini_data, 
-                        filename=target_path.name
+                        filename=target_path.name,
+                        default_config=user_cfg
                     )
                 elif HAS_LOCAL_OCR:
                     records = yamato_converter.convert_files_to_records([target_path])
@@ -1170,7 +1302,7 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
                             fb = fp.read()
                         mt = gemini_converter.get_mime_type(f.name, fb)
                         gdata = gemini_converter.call_gemini_api(fb, mt, filename=f.name, api_key=api_key, model=model)
-                        recs = gemini_converter.convert_gemini_response_to_yamato_records(gdata, filename=f.name)
+                        recs = gemini_converter.convert_gemini_response_to_yamato_records(gdata, filename=f.name, default_config=user_cfg)
                         records.extend(recs)
                 self.send_json({"records": records})
             except Exception as e:
@@ -1195,7 +1327,7 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
                     filename = f"黑貓出貨單_{today_str}.csv"
                     
                 # 產出標準 CSV 文字
-                csv_text = gemini_converter.export_records_to_csv_text(records, default_config=config)
+                csv_text = gemini_converter.export_records_to_csv_text(records, default_config=config or user_cfg)
                 
                 # 若非雲端環境，同時儲存至本機目錄
                 if not IS_CLOUD:
@@ -1284,7 +1416,8 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
                         )
                         recs = gemini_converter.convert_gemini_response_to_yamato_records(
                             gdata,
-                            filename=clean_fname
+                            filename=clean_fname,
+                            default_config=user_cfg
                         )
                         all_records.extend(recs)
                 elif not IS_CLOUD and HAS_LOCAL_OCR:
@@ -1309,7 +1442,7 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
                         stem = Path(uploaded_names[0]).stem
                         clean_stem = re.sub(r'[\s:]+', '_', stem)
                         csv_path = cdir / f"黑貓出貨單_{clean_stem}.csv"
-                        gemini_converter.export_records_to_csv_file(all_records, str(csv_path))
+                        gemini_converter.export_records_to_csv_file(all_records, str(csv_path), default_config=user_cfg)
                     except Exception as e:
                         print("寫入單檔 CSV 失敗:", e)
                 
