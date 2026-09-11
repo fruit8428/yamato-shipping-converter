@@ -2,13 +2,15 @@
 # -*- coding: utf-8 -*-
 """
 黑貓宅急便出貨單自動轉換系統 - Web 視覺化操作介面
-無需安裝第三方套件，使用 Python 內建 HTTP Server
-支援自訂切換工作目錄、拖曳上傳、單檔獨立辨識、線上編輯與一鍵匯出黑貓標準 CSV
+支援 Google Gemini 2.5 Flash 雲端多模態 AI 辨識 與 macOS 原生 Vision OCR 雙引擎
+可於本機直接執行，亦可無縫部署至 Vercel Serverless
 """
 
 import os
 import sys
 import re
+import io
+import csv
 import json
 import mimetypes
 import urllib.parse
@@ -17,17 +19,29 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from datetime import datetime
 
-import yamato_converter
-
+# 確保引用本目錄模組
 BASE_DIR = Path(__file__).resolve().parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
+import gemini_converter
+
+# 若在 macOS 本機，嘗試引入原生 OCR 引擎
+try:
+    import yamato_converter
+    HAS_LOCAL_OCR = True
+except Exception:
+    HAS_LOCAL_OCR = False
+
 CONFIG_FILE = BASE_DIR / "config.json"
 CURRENT_DIR = BASE_DIR
 PORT = 8765
+IS_CLOUD = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
 
 def get_current_dir() -> Path:
     """取得當前工作目錄"""
     global CURRENT_DIR
-    if CONFIG_FILE.exists():
+    if not IS_CLOUD and CONFIG_FILE.exists():
         try:
             with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                 d = json.load(f)
@@ -42,11 +56,12 @@ def set_current_dir(new_path: Path):
     """設定並持久化當前工作目錄"""
     global CURRENT_DIR
     CURRENT_DIR = new_path.resolve()
-    try:
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-            json.dump({'current_dir': str(CURRENT_DIR)}, f, ensure_ascii=False)
-    except Exception as e:
-        print("儲存設定失敗:", e)
+    if not IS_CLOUD:
+        try:
+            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump({'current_dir': str(CURRENT_DIR)}, f, ensure_ascii=False)
+        except Exception as e:
+            print("儲存設定失敗:", e)
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="zh-TW">
@@ -74,8 +89,9 @@ body { background: var(--bg-main); color: var(--text-main); min-height: 100vh; p
 header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding-bottom: 14px; border-bottom: 2px solid var(--border); }
 .brand { display: flex; align-items: center; gap: 14px; }
 .brand-logo { width: 44px; height: 44px; background: var(--primary); color: white; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: bold; }
-.brand-title h1 { font-size: 22px; font-weight: 700; color: var(--primary-dark); }
+.brand-title h1 { font-size: 22px; font-weight: 700; color: var(--primary-dark); display: flex; align-items: center; gap: 10px; }
 .brand-title p { font-size: 13px; color: var(--text-muted); }
+.engine-badge { font-size: 11.5px; font-weight: 600; background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 3px 10px; border-radius: 999px; }
 
 .action-bar { display: flex; gap: 10px; }
 .btn { padding: 9px 16px; border-radius: 8px; font-size: 13.5px; font-weight: 600; cursor: pointer; border: none; transition: all 0.2s; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
@@ -89,10 +105,21 @@ header { display: flex; align-items: center; justify-content: space-between; mar
 .btn-danger-outline:hover { background: #fee2e2; }
 
 .grid-layout { display: grid; grid-template-columns: 330px 1fr; gap: 20px; }
-.card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 14px; padding: 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+.card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 14px; padding: 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-bottom: 16px; }
+
+/* API Key Card */
+.api-card { border-left: 4px solid #10b981; }
+.api-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.api-title { font-size: 13px; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 6px; }
+.api-status { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 999px; }
+.api-status.ready { background: #d1fae5; color: #065f46; }
+.api-status.missing { background: #fef3c7; color: #92400e; }
+.api-input-wrap { display: flex; gap: 6px; }
+.api-input { flex: 1; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--border); font-size: 12px; font-family: monospace; }
+.api-input:focus { border-color: #10b981; outline: none; }
 
 /* Directory switch card */
-.dir-card { margin-bottom: 16px; border-left: 4px solid var(--primary); }
+.dir-card { border-left: 4px solid var(--primary); }
 .dir-badge { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 999px; background: var(--primary-light); color: var(--primary-dark); }
 .dir-input { width: 100%; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--border); font-size: 12px; font-family: monospace; background: #f8fafc; color: #334155; }
 .dir-input:focus { background: white; border-color: var(--primary); outline: none; }
@@ -208,7 +235,7 @@ td input:focus {
 .history-date { font-size: 11px; color: var(--text-muted); }
 
 /* Loading overlay */
-#loading-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 100; align-items: center; justify-content: center; flex-direction: column; color: white; backdrop-filter: blur(2px); }
+#loading-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100; align-items: center; justify-content: center; flex-direction: column; color: white; backdrop-filter: blur(3px); }
 .spinner { width: 50px; height: 50px; border: 5px solid rgba(255,255,255,0.3); border-top-color: #ffffff; border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 16px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 </style>
@@ -218,7 +245,7 @@ td input:focus {
 <div id="loading-overlay">
   <div class="spinner"></div>
   <div style="font-size: 18px; font-weight: 700;" id="loadingText">正在處理中...</div>
-  <div style="font-size: 13px; opacity: 0.85; margin-top: 6px;" id="loadingSubtext">透過 Apple Vision 引擎進行高精度繁體中文與版面識別</div>
+  <div style="font-size: 13px; opacity: 0.85; margin-top: 6px;" id="loadingSubtext">透過 Google Gemini 2.5 Flash 進行多模態高精度辨識</div>
 </div>
 
 <div class="container">
@@ -226,13 +253,16 @@ td input:focus {
     <div class="brand">
       <div class="brand-logo">🐱</div>
       <div class="brand-title">
-        <h1>黑貓宅急便出貨單自動轉換系統</h1>
-        <p>都匯水果專用版 ｜ 支援自訂目錄、PDF、訂單截圖自動辨識</p>
+        <h1>
+          黑貓宅急便出貨單自動轉換系統
+          <span class="engine-badge" id="engineBadge">✨ Google Gemini 2.5 Flash API</span>
+        </h1>
+        <p>都匯水果專用版 ｜ 支援 PDF、JPG、PNG、LINE 截圖辨識並一鍵匯出黑貓 27 欄標準 CSV</p>
       </div>
     </div>
     <div class="action-bar">
-      <button class="btn btn-outline" onclick="refreshDirectoryData()">🔄 重新整理目錄</button>
-      <button class="btn btn-outline" onclick="recognizeAllFiles()" title="將當前目錄中所有客戶檔案一次合併辨識">📦 批次辨識當前目錄全部檔案</button>
+      <button class="btn btn-outline" id="btnRefreshDir" onclick="refreshDirectoryData()">🔄 重新整理</button>
+      <button class="btn btn-outline" id="btnBatchAll" onclick="recognizeAllFiles()" title="將當前目錄中所有客戶檔案一次合併辨識">📦 批次辨識全部檔案</button>
       <button class="btn btn-export" onclick="exportCsv()">📥 匯出黑貓標準 CSV</button>
     </div>
   </header>
@@ -240,21 +270,43 @@ td input:focus {
   <div class="grid-layout">
     <!-- Left Sidebar -->
     <div class="sidebar">
-      <!-- Directory Switch Card -->
-      <div class="card dir-card">
+      <!-- Gemini API Key Card -->
+      <div class="card api-card">
+        <div class="api-header">
+          <div class="api-title">
+            <span>🔑</span> Google Gemini API 金鑰
+          </div>
+          <span class="api-status" id="apiStatusBadge">檢查中...</span>
+        </div>
+        <div class="api-input-wrap">
+          <input type="password" id="geminiApiKeyInput" class="api-input" placeholder="AIzaSy..." oninput="handleApiKeyChange()">
+          <button class="btn btn-outline" style="padding:4px 8px; font-size:11px;" onclick="toggleApiKeyVisibility()" id="btnToggleKey">顯示</button>
+        </div>
+        <div style="font-size: 11px; color: var(--text-muted); margin-top: 6px; line-height: 1.4;">
+          預設使用 <b>Gemini 2.5 Flash</b> 模型。<a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: #0284c7; text-decoration: underline;">免費取得金鑰</a>
+        </div>
+      </div>
+
+      <!-- Directory Switch Card (for local) / Cloud Status Card (for Vercel) -->
+      <div class="card dir-card" id="dirCard">
         <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
           <div style="font-size:13px; font-weight:700; color:var(--text-main); display:flex; align-items:center; gap:6px;">
-            <span>📂</span> 工作檔案目錄
+            <span id="dirIcon">📂</span> <span id="dirCardTitle">工作檔案目錄</span>
           </div>
           <span class="dir-badge" id="dirBadge">載入中...</span>
         </div>
-        <div style="display:flex; gap:6px; margin-bottom:8px;">
-          <input type="text" id="dirInput" class="dir-input" placeholder="/路徑/至/資料夾" title="可手動貼上或輸入目錄路徑">
-          <button class="btn btn-outline" style="padding:6px 12px; font-size:12px; white-space:nowrap;" onclick="applyManualDir()">套用</button>
+        <div id="dirControlsLocal">
+          <div style="display:flex; gap:6px; margin-bottom:8px;">
+            <input type="text" id="dirInput" class="dir-input" placeholder="/路徑/至/資料夾" title="可手動貼上或輸入目錄路徑">
+            <button class="btn btn-outline" style="padding:6px 12px; font-size:12px; white-space:nowrap;" onclick="applyManualDir()">套用</button>
+          </div>
+          <div style="display:flex; gap:6px;">
+            <button class="btn btn-primary" style="flex:1; padding:7px 10px; font-size:12px; justify-content:center;" onclick="browseFolder()">🖥️ 瀏覽選擇資料夾...</button>
+            <button class="btn btn-outline" style="padding:7px 10px; font-size:12px;" onclick="resetDefaultDir()" title="切換回系統預設出貨目錄">預設</button>
+          </div>
         </div>
-        <div style="display:flex; gap:6px;">
-          <button class="btn btn-primary" style="flex:1; padding:7px 10px; font-size:12px; justify-content:center;" onclick="browseFolder()">🖥️ 瀏覽選擇資料夾...</button>
-          <button class="btn btn-outline" style="padding:7px 10px; font-size:12px;" onclick="resetDefaultDir()" title="切換回系統預設出貨目錄">預設</button>
+        <div id="dirControlsCloud" style="display:none; font-size:12px; color:var(--text-muted); line-height:1.5;">
+          ☁️ <b>雲端免安裝模式</b>：支援任何裝置，拖曳或選擇 PDF/圖片即可秒速辨識，完成後直接下載標準 CSV。
         </div>
       </div>
 
@@ -262,13 +314,13 @@ td input:focus {
         <!-- Drop Zone -->
         <div class="dropzone" id="dropzone" onclick="document.getElementById('fileInput').click()">
           <div class="drop-icon">📥</div>
-          <div class="drop-title">拖曳單一檔案至此辨識</div>
-          <div class="drop-subtitle">支援 PDF、JPG、PNG、HEIC</div>
-          <div style="font-size: 11px; color: var(--primary); margin-top: 6px; font-weight:600;">放開後自動存入目錄並立即辨識</div>
-          <input type="file" id="fileInput" multiple style="display:none;" onchange="handleFileSelect(event)">
+          <div class="drop-title">點擊或拖曳檔案至此辨識</div>
+          <div class="drop-subtitle">支援 PDF、JPG、PNG、HEIC、WEBP</div>
+          <div style="font-size: 11px; color: var(--primary); margin-top: 6px; font-weight:600;">放開後自動進行單檔高精度辨識</div>
+          <input type="file" id="fileInput" multiple accept=".pdf,.jpg,.jpeg,.png,.heic,.webp" style="display:none;" onchange="handleFileSelect(event)">
         </div>
 
-        <div class="settings-group">
+        <div class="settings-group" id="fileListGroup">
           <h3>目錄中檔案清單</h3>
           <div class="file-list" id="fileListContainer">
             <div style="color:var(--text-muted); font-size:12px; text-align:center; padding:12px;">載入中...</div>
@@ -309,8 +361,8 @@ td input:focus {
         </div>
       </div>
 
-      <!-- History / Exported CSVs -->
-      <div class="card history-card">
+      <!-- History / Exported CSVs (Local only) -->
+      <div class="card history-card" id="historyCard">
         <div class="history-title">當前目錄產出之 CSV</div>
         <div id="historyList">載入中...</div>
       </div>
@@ -353,8 +405,8 @@ td input:focus {
                 <td colspan="11" style="text-align: center; padding: 80px 20px; color: var(--text-muted);">
                   <div style="font-size: 40px; margin-bottom: 12px;">📥</div>
                   <div style="font-size: 16px; font-weight: 700; color: #334155;">清單目前為空</div>
-                  <div style="font-size: 13px; margin-top: 6px; color: #64748b;">請將客戶的 PDF、訂單截圖或照片拖曳至左側上傳區，系統將自動進行單檔辨識</div>
-                  <div style="font-size: 12px; margin-top: 10px; color: #94a3b8;">（也可點擊左側目錄檔案旁的「辨識此檔」直接測試）</div>
+                  <div style="font-size: 13px; margin-top: 6px; color: #64748b;">請將客戶的 PDF、訂單截圖或照片拖曳至左側上傳區，系統將自動進行多模態 AI 辨識</div>
+                  <div style="font-size: 12px; margin-top: 10px; color: #94a3b8;">（支援表格排版自動萃取、LINE 截圖地址解析與寄件人資訊比對）</div>
                 </td>
               </tr>
             </tbody>
@@ -368,31 +420,106 @@ td input:focus {
 <script>
 let currentOrders = [];
 let currentSourceFileName = "";
+let isCloudEnv = false;
+let serverHasEnvKey = false;
 
 // 初始化
 window.onload = function() {
+  loadSavedApiKey();
   loadCurrentDir();
   renderTable();
 };
 
-// 取得當前工作目錄
+function getApiKey() {
+  return (localStorage.getItem('yamato_gemini_api_key') || '').trim();
+}
+
+function loadSavedApiKey() {
+  const saved = getApiKey();
+  if (saved) {
+    document.getElementById('geminiApiKeyInput').value = saved;
+  }
+  updateApiStatusUI();
+}
+
+function handleApiKeyChange() {
+  const val = document.getElementById('geminiApiKeyInput').value.trim();
+  if (val) {
+    localStorage.setItem('yamato_gemini_api_key', val);
+  } else {
+    localStorage.removeItem('yamato_gemini_api_key');
+  }
+  updateApiStatusUI();
+}
+
+function toggleApiKeyVisibility() {
+  const inp = document.getElementById('geminiApiKeyInput');
+  const btn = document.getElementById('btnToggleKey');
+  if (inp.type === 'password') {
+    inp.type = 'text';
+    btn.textContent = '隱藏';
+  } else {
+    inp.type = 'password';
+    btn.textContent = '顯示';
+  }
+}
+
+function updateApiStatusUI() {
+  const badge = document.getElementById('apiStatusBadge');
+  const key = getApiKey();
+  if (serverHasEnvKey) {
+    badge.textContent = "🟢 雲端金鑰已配置";
+    badge.className = "api-status ready";
+    badge.title = "已從伺服器環境變數 GEMINI_API_KEY 取得金鑰";
+  } else if (key) {
+    badge.textContent = "🟢 本地金鑰已就緒";
+    badge.className = "api-status ready";
+    badge.title = "已從瀏覽器儲存區讀取金鑰";
+  } else {
+    badge.textContent = "🟡 請設定金鑰";
+    badge.className = "api-status missing";
+    badge.title = "尚未設定 Google Gemini API 金鑰";
+  }
+}
+
+// 取得當前工作目錄與環境資訊
 function loadCurrentDir() {
   fetch('/api/get_current_dir')
     .then(r => r.json())
     .then(data => {
-      if (data.dir) {
-        document.getElementById('dirInput').value = data.dir;
-        document.getElementById('dirBadge').textContent = data.name || "現行目錄";
-        document.getElementById('dirBadge').title = data.dir;
-        loadDirectoryFiles();
-        loadHistoryCsvs();
+      isCloudEnv = Boolean(data.is_cloud);
+      serverHasEnvKey = Boolean(data.has_env_key);
+      updateApiStatusUI();
+
+      if (isCloudEnv) {
+        document.getElementById('dirCardTitle').textContent = "雲端服務狀態";
+        document.getElementById('dirIcon').textContent = "☁️";
+        document.getElementById('dirBadge').textContent = "Vercel 線上運行";
+        document.getElementById('dirControlsLocal').style.display = "none";
+        document.getElementById('dirControlsCloud').style.display = "block";
+        document.getElementById('fileListGroup').style.display = "none";
+        document.getElementById('historyCard').style.display = "none";
+        document.getElementById('btnRefreshDir').style.display = "none";
+        document.getElementById('btnBatchAll').style.display = "none";
+      } else {
+        if (data.dir) {
+          document.getElementById('dirInput').value = data.dir;
+          document.getElementById('dirBadge').textContent = data.name || "現行目錄";
+          document.getElementById('dirBadge').title = data.dir;
+          loadDirectoryFiles();
+          loadHistoryCsvs();
+        }
       }
+    })
+    .catch(() => {
+      // 離線或純前端情況
+      updateApiStatusUI();
     });
 }
 
 // 瀏覽選擇目錄 (叫起 Mac 原生資料夾選擇視窗)
 function browseFolder() {
-  showLoading(true, "請在跳出的 Mac 視窗中選擇資料夾...", "若未跳出，請檢查 Mac 畫面中間提示");
+  showLoading(true, "請在跳出的視窗中選擇資料夾...", "若未跳出，請檢查畫面提示");
   fetch('/api/browse_dir', { method: 'POST' })
     .then(r => r.json())
     .then(data => {
@@ -403,8 +530,6 @@ function browseFolder() {
         document.getElementById('dirBadge').title = data.dir;
         loadDirectoryFiles();
         loadHistoryCsvs();
-      } else if (data.canceled) {
-        // 使用者取消，不動作
       }
     })
     .catch(err => {
@@ -413,7 +538,6 @@ function browseFolder() {
     });
 }
 
-// 手動套用輸入框的目錄路徑
 function applyManualDir() {
   const dirPath = document.getElementById('dirInput').value.trim();
   if (!dirPath) {
@@ -434,7 +558,7 @@ function applyManualDir() {
       document.getElementById('dirBadge').title = data.dir;
       loadDirectoryFiles();
       loadHistoryCsvs();
-      alert(`✅ 已成功切換至目錄：\n${data.dir}`);
+      alert(`✅ 已成功切換至目錄：\\n${data.dir}`);
     } else {
       alert('❌ 切換失敗：' + (data.error || '路徑無效'));
     }
@@ -445,7 +569,6 @@ function applyManualDir() {
   });
 }
 
-// 切換回系統預設出貨目錄
 function resetDefaultDir() {
   fetch('/api/reset_default_dir', { method: 'POST' })
     .then(r => r.json())
@@ -460,7 +583,6 @@ function resetDefaultDir() {
     });
 }
 
-// 刷新目錄資料
 function refreshDirectoryData() {
   loadCurrentDir();
 }
@@ -492,37 +614,50 @@ dropzone.addEventListener('drop', e => {
   e.stopPropagation();
   const files = e.dataTransfer.files;
   if (files && files.length > 0) {
-    uploadAndRecognizeSingle(files);
+    uploadAndRecognizeFiles(files);
   }
 });
 
 function handleFileSelect(e) {
   if (e.target.files && e.target.files.length > 0) {
-    uploadAndRecognizeSingle(e.target.files);
+    uploadAndRecognizeFiles(e.target.files);
   }
 }
 
-// 拖曳檔案後：單筆檔案精準辨識，只呈現在當前表格
-function uploadAndRecognizeSingle(files) {
+// 拖曳檔案後：呼叫後端進行高精度辨識
+function uploadAndRecognizeFiles(files) {
+  const apiKey = getApiKey();
   const formData = new FormData();
   for (let f of files) {
     formData.append('files', f);
   }
 
-  showLoading(true, "正在上傳並進行單檔高精度辨識...", "使用 Apple Vision 神經網路 OCR 分析");
-  fetch('/api/upload', { method: 'POST', body: formData })
+  showLoading(true, "正在使用 Google Gemini 2.5 Flash 辨識...", "多模態視覺模型深度解析收件地址與訂單數量");
+  
+  const headers = {};
+  if (apiKey) {
+    headers['X-Gemini-API-Key'] = apiKey;
+  }
+
+  fetch('/api/upload', { 
+    method: 'POST', 
+    headers: headers,
+    body: formData 
+  })
     .then(r => r.json())
     .then(res => {
       showLoading(false);
       if (res.success && res.records) {
         currentOrders = res.records;
-        currentSourceFileName = (res.uploaded && res.uploaded.length > 0) ? res.uploaded[0] : "";
+        currentSourceFileName = (res.uploaded && res.uploaded.length > 0) ? res.uploaded.join(', ') : "";
         renderTable();
-        loadDirectoryFiles();
-        loadHistoryCsvs();
+        if (!isCloudEnv) {
+          loadDirectoryFiles();
+          loadHistoryCsvs();
+        }
       } else {
-        alert('⚠️ 提示：' + (res.error || '無法辨識檔案內容'));
-        loadDirectoryFiles();
+        alert('⚠️ 辨識提示：' + (res.error || '無法解析檔案內容'));
+        if (!isCloudEnv) loadDirectoryFiles();
       }
     })
     .catch(err => {
@@ -533,10 +668,15 @@ function uploadAndRecognizeSingle(files) {
 
 // 辨識當前目錄中指定的個別檔案
 function recognizeSingleFile(filename) {
-  showLoading(true, `正在辨識檔案：${filename}...`, "分析表格或截圖文字排版");
+  const apiKey = getApiKey();
+  showLoading(true, `正在辨識檔案：${filename}...`, "透過 Gemini 2.5 Flash 辨識");
+  
+  const headers = { 'Content-Type': 'application/json' };
+  if (apiKey) headers['X-Gemini-API-Key'] = apiKey;
+
   fetch('/api/process_file', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: headers,
     body: JSON.stringify({ filename: filename })
   })
   .then(r => r.json())
@@ -546,6 +686,8 @@ function recognizeSingleFile(filename) {
       currentOrders = data.records;
       currentSourceFileName = filename;
       renderTable();
+    } else if (data.error) {
+      alert('辨識失敗：' + data.error);
     }
   })
   .catch(err => {
@@ -557,8 +699,13 @@ function recognizeSingleFile(filename) {
 // 批次辨識當前目錄全部檔案
 function recognizeAllFiles() {
   if (!confirm("確定要將當前目錄中的所有客戶檔案一次性全部辨識並匯總至清單嗎？")) return;
-  showLoading(true, "正在批次辨識目錄中所有檔案...", "合併全部訂單");
-  fetch('/api/process_all', { method: 'POST' })
+  const apiKey = getApiKey();
+  showLoading(true, "正在批次辨識目錄中所有檔案...", "多模態解析所有文件");
+  
+  const headers = {};
+  if (apiKey) headers['X-Gemini-API-Key'] = apiKey;
+
+  fetch('/api/process_all', { method: 'POST', headers: headers })
     .then(r => r.json())
     .then(data => {
       showLoading(false);
@@ -567,6 +714,8 @@ function recognizeAllFiles() {
         currentSourceFileName = "當前目錄全部檔案合併";
         renderTable();
         loadHistoryCsvs();
+      } else if (data.error) {
+        alert('批次辨識失敗：' + data.error);
       }
     })
     .catch(err => {
@@ -575,13 +724,13 @@ function recognizeAllFiles() {
     });
 }
 
-// 載入當前目錄檔案列表
 function loadDirectoryFiles() {
+  if (isCloudEnv) return;
   fetch('/api/list_files')
     .then(r => r.json())
     .then(files => {
       const container = document.getElementById('fileListContainer');
-      if (files.length === 0) {
+      if (!files || files.length === 0) {
         container.innerHTML = '<div style="color:var(--text-muted); font-size:12px; text-align:center; padding:12px;">當前目錄下尚無客戶檔案</div>';
         return;
       }
@@ -591,16 +740,17 @@ function loadDirectoryFiles() {
           <button class="btn-mini" onclick="recognizeSingleFile('${escapeHtml(f)}')">辨識此檔</button>
         </div>
       `).join('');
-    });
+    })
+    .catch(() => {});
 }
 
-// 載入當前目錄已產出的歷史 CSV
 function loadHistoryCsvs() {
+  if (isCloudEnv) return;
   fetch('/api/list_csvs')
     .then(r => r.json())
     .then(csvs => {
       const container = document.getElementById('historyList');
-      if (csvs.length === 0) {
+      if (!csvs || csvs.length === 0) {
         container.innerHTML = '<div style="color:var(--text-muted); font-size:12px; padding:8px;">尚無匯出紀錄</div>';
         return;
       }
@@ -613,10 +763,10 @@ function loadHistoryCsvs() {
           <a href="/download/${encodeURIComponent(f.name)}" class="btn btn-outline" style="padding:4px 8px; font-size:11px;" download>下載</a>
         </div>
       `).join('');
-    });
+    })
+    .catch(() => {});
 }
 
-// 清空目前表格
 function clearTable() {
   if (currentOrders.length > 0 && !confirm("確定要清空目前畫面上的訂單清單嗎？")) return;
   currentOrders = [];
@@ -624,7 +774,6 @@ function clearTable() {
   renderTable();
 }
 
-// 渲染表格
 function renderTable() {
   const tbody = document.getElementById('ordersTbody');
   const countBadge = document.getElementById('orderCountBadge');
@@ -638,8 +787,8 @@ function renderTable() {
         <td colspan="11" style="text-align: center; padding: 80px 20px; color: var(--text-muted);">
           <div style="font-size: 40px; margin-bottom: 12px;">📥</div>
           <div style="font-size: 16px; font-weight: 700; color: #334155;">清單目前為空</div>
-          <div style="font-size: 13px; margin-top: 6px; color: #64748b;">請將客戶的 PDF、訂單截圖或照片拖曳至左側上傳區，系統將自動進行單檔辨識</div>
-          <div style="font-size: 12px; margin-top: 10px; color: #94a3b8;">（也可點擊左側目錄檔案旁的「辨識此檔」直接測試）</div>
+          <div style="font-size: 13px; margin-top: 6px; color: #64748b;">請將客戶的 PDF、訂單截圖或照片拖曳至左側上傳區，系統將自動進行多模態 AI 辨識</div>
+          <div style="font-size: 12px; margin-top: 10px; color: #94a3b8;">（支援表格排版自動萃取、LINE 截圖地址解析與寄件人資訊比對）</div>
         </td>
       </tr>
     `;
@@ -673,7 +822,7 @@ function renderTable() {
 
 function updateRow(index, key, val) {
   if (key === '收件人手機' || key === '收件人電話' || key === '寄件人手機') {
-    val = val ? ("'" + val.replace(/^'+/, '')) : '';
+    val = val ? ("'" + String(val).replace(/^'+/, '')) : '';
   }
   currentOrders[index][key] = val;
 }
@@ -701,7 +850,7 @@ function addNewRow() {
   renderTable();
 }
 
-// 匯出黑貓 CSV
+// 匯出黑貓標準 CSV
 function exportCsv() {
   if (currentOrders.length === 0) {
     alert('目前無可匯出的訂單資料！請先拖曳檔案進行辨識。');
@@ -731,10 +880,13 @@ function exportCsv() {
   .then(r => r.json())
   .then(res => {
     showLoading(false);
-    if (res.filename) {
-      alert(`🎉 成功匯出至黑貓標準出貨單！\n檔案名稱：${res.filename}\n已儲存至當前工作目錄。`);
-      loadHistoryCsvs();
-      window.location.href = `/download/${encodeURIComponent(res.filename)}`;
+    if (res.filename && res.csv_content) {
+      // 在瀏覽器端直接觸發 UTF-8 BOM CSV 下載
+      triggerDirectDownload(res.filename, res.csv_content);
+      alert(`🎉 成功匯出至黑貓標準出貨單！\\n檔案名稱：${res.filename}\\n共 ${res.count} 筆訂單。已啟動自動下載！`);
+      if (!isCloudEnv) loadHistoryCsvs();
+    } else {
+      alert('匯出異常：' + (res.error || '未取得 CSV 資料'));
     }
   })
   .catch(err => {
@@ -743,11 +895,24 @@ function exportCsv() {
   });
 }
 
+function triggerDirectDownload(filename, csvText) {
+  // 加入 UTF-8 BOM 防止 Excel 亂碼
+  const blob = new Blob(["\\ufeff" + csvText], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 function showLoading(show, title, subtext) {
   const overlay = document.getElementById('loading-overlay');
   if (show) {
     document.getElementById('loadingText').textContent = title || "正在處理中...";
-    document.getElementById('loadingSubtext').textContent = subtext || "透過 Apple Vision 引擎進行高精度辨識";
+    document.getElementById('loadingSubtext').textContent = subtext || "透過 Google Gemini 2.5 Flash 進行多模態辨識";
     overlay.style.display = 'flex';
   } else {
     overlay.style.display = 'none';
@@ -766,6 +931,13 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.do_GET()
 
+    def get_api_key(self):
+        """取得請求中的 Gemini API Key 或環境變數"""
+        key = self.headers.get("X-Gemini-API-Key", "").strip()
+        if not key:
+            key = os.environ.get("GEMINI_API_KEY", "").strip()
+        return key
+
     def do_GET(self):
         url_parts = urllib.parse.urlparse(self.path)
         path = url_parts.path
@@ -779,13 +951,19 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
             return
             
         elif path == "/api/get_current_dir":
-            self.send_json({"dir": str(cdir), "name": cdir.name})
+            has_env_key = bool(os.environ.get("GEMINI_API_KEY"))
+            self.send_json({
+                "dir": str(cdir) if not IS_CLOUD else "雲端環境 (Vercel)",
+                "name": cdir.name if not IS_CLOUD else "Vercel Cloud",
+                "is_cloud": IS_CLOUD,
+                "has_env_key": has_env_key
+            })
             return
             
         elif path == "/api/list_files":
             valid_exts = ['.pdf', '.jpg', '.jpeg', '.png', '.heic', '.webp']
             files = []
-            if cdir.exists() and cdir.is_dir():
+            if not IS_CLOUD and cdir.exists() and cdir.is_dir():
                 files = [
                     f.name for f in cdir.iterdir()
                     if f.is_file() and f.suffix.lower() in valid_exts and not f.name.startswith('.')
@@ -795,7 +973,7 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
             
         elif path == "/api/list_csvs":
             csvs = []
-            if cdir.exists() and cdir.is_dir():
+            if not IS_CLOUD and cdir.exists() and cdir.is_dir():
                 for f in sorted(cdir.glob("黑貓出貨單_*.csv"), key=lambda x: x.stat().st_mtime, reverse=True):
                     stat = f.stat()
                     csvs.append({
@@ -809,7 +987,7 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
         elif path.startswith("/download/"):
             filename = urllib.parse.unquote(path.replace("/download/", ""))
             file_path = cdir / filename
-            if file_path.exists():
+            if not IS_CLOUD and file_path.exists():
                 self.send_response(200)
                 self.send_header("Content-Type", "text/csv; charset=utf-8")
                 self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{urllib.parse.quote(filename)}")
@@ -828,6 +1006,7 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
         url_parts = urllib.parse.urlparse(self.path)
         path = url_parts.path
         cdir = get_current_dir()
+        api_key = self.get_api_key()
         
         if path == "/api/set_current_dir":
             try:
@@ -851,7 +1030,9 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
             return
 
         elif path == "/api/browse_dir":
-            # 叫起 Mac 原生 choose folder 對話框
+            if IS_CLOUD:
+                self.send_json({"success": False, "error": "雲端模式不支援本機資料夾選擇"})
+                return
             try:
                 curr_str = str(cdir)
                 script = f'''
@@ -879,7 +1060,6 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
             return
 
         elif path == "/api/process_file":
-            # 辨識指定單一檔案
             try:
                 content_length = int(self.headers.get("Content-Length", 0))
                 body = self.rfile.read(content_length)
@@ -889,16 +1069,54 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
                 if not target_path.exists():
                     self.send_json({"error": "檔案不存在"}, status=404)
                     return
-                records = yamato_converter.convert_files_to_records([target_path])
+                
+                # 優先使用 Gemini 2.5 Flash
+                if api_key:
+                    with open(target_path, "rb") as f:
+                        file_bytes = f.read()
+                    mime_type = gemini_converter.get_mime_type(target_path.name, file_bytes)
+                    gemini_data = gemini_converter.call_gemini_api(
+                        file_bytes=file_bytes,
+                        mime_type=mime_type,
+                        filename=target_path.name,
+                        api_key=api_key
+                    )
+                    records = gemini_converter.convert_gemini_response_to_yamato_records(
+                        gemini_data, 
+                        filename=target_path.name
+                    )
+                elif HAS_LOCAL_OCR:
+                    records = yamato_converter.convert_files_to_records([target_path])
+                else:
+                    self.send_json({"error": "請先設定 Google Gemini API Key（可在左側設定欄輸入或於環境變數設定）"}, status=400)
+                    return
+
                 self.send_json({"records": records})
             except Exception as e:
                 self.send_json({"error": str(e)}, status=500)
             return
             
         elif path == "/api/process_all":
-            # 批次辨識當前目錄全部檔案
             try:
-                records = yamato_converter.auto_process_directory(cdir)
+                if IS_CLOUD:
+                    self.send_json({"error": "雲端模式請直接拖曳檔案上傳辨識"}, status=400)
+                    return
+                if HAS_LOCAL_OCR and not api_key:
+                    records = yamato_converter.auto_process_directory(cdir)
+                else:
+                    valid_exts = ['.pdf', '.jpg', '.jpeg', '.png', '.heic', '.webp']
+                    files = [
+                        f for f in cdir.iterdir() 
+                        if f.is_file() and f.suffix.lower() in valid_exts and not f.name.startswith('.')
+                    ]
+                    records = []
+                    for f in files:
+                        with open(f, "rb") as fp:
+                            fb = fp.read()
+                        mt = gemini_converter.get_mime_type(f.name, fb)
+                        gdata = gemini_converter.call_gemini_api(fb, mt, filename=f.name, api_key=api_key)
+                        recs = gemini_converter.convert_gemini_response_to_yamato_records(gdata, filename=f.name)
+                        records.extend(recs)
                 self.send_json({"records": records})
             except Exception as e:
                 self.send_json({"error": str(e)}, status=500)
@@ -914,22 +1132,36 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
                 source_name = payload.get("source_name", "")
                 
                 today_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-                if source_name and "目錄全部檔案" not in source_name:
+                if source_name and "全部" not in source_name and "," not in source_name:
                     stem = Path(source_name).stem
                     clean_stem = re.sub(r'[\s:]+', '_', stem)
                     filename = f"黑貓出貨單_{clean_stem}_{today_str}.csv"
                 else:
                     filename = f"黑貓出貨單_{today_str}.csv"
                     
-                out_path = cdir / filename
-                yamato_converter.export_to_yamato_csv(records, out_path, default_config=config)
-                self.send_json({"filename": filename, "count": len(records)})
+                # 產出標準 CSV 文字
+                csv_text = gemini_converter.export_records_to_csv_text(records, default_config=config)
+                
+                # 若非雲端環境，同時儲存至本機目錄
+                if not IS_CLOUD:
+                    try:
+                        out_path = cdir / filename
+                        with open(out_path, 'w', encoding='utf-8-sig', newline='') as f:
+                            f.write(csv_text)
+                    except Exception as e:
+                        print("本機儲存 CSV 失敗:", e)
+
+                self.send_json({
+                    "filename": filename, 
+                    "count": len(records),
+                    "csv_content": csv_text
+                })
             except Exception as e:
                 self.send_json({"error": str(e)}, status=500)
             return
             
         elif path == "/api/upload":
-            # 接收拖曳上傳之檔案，存入當前目錄並進行單檔辨識
+            # 接收上傳之檔案並使用 Gemini 2.5 Flash 或原生 OCR 進行辨識
             try:
                 content_type = self.headers.get('Content-Type', '')
                 if 'multipart/form-data' not in content_type:
@@ -946,8 +1178,7 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
                 body = self.rfile.read(content_length)
                 
                 parts = body.split(b'--' + boundary)
-                uploaded_paths = []
-                uploaded_names = []
+                uploaded_files = [] # list of (clean_fname, file_bytes)
                 
                 for p in parts:
                     if b'filename=' in p or b'filename*=' in p:
@@ -975,35 +1206,65 @@ class YamatoRequestHandler(BaseHTTPRequestHandler):
                         elif file_content.endswith(b'\r\n'):
                             file_content = file_content[:-2]
                             
-                        save_path = cdir / clean_fname
-                        with open(save_path, 'wb') as f:
-                            f.write(file_content)
-                            
-                        uploaded_paths.append(save_path)
-                        uploaded_names.append(clean_fname)
+                        uploaded_files.append((clean_fname, file_content))
                         
-                if not uploaded_paths:
+                if not uploaded_files:
                     self.send_json({"success": False, "error": "未解析到有效檔案"}, status=400)
                     return
                     
-                # 僅對剛上傳的檔案進行辨識
-                records = yamato_converter.convert_files_to_records(uploaded_paths)
+                all_records = []
+                uploaded_names = [f[0] for f in uploaded_files]
+
+                # 辨識處理
+                if api_key:
+                    # 使用 Google Gemini 2.5 Flash API
+                    for clean_fname, file_bytes in uploaded_files:
+                        mime_type = gemini_converter.get_mime_type(clean_fname, file_bytes)
+                        gdata = gemini_converter.call_gemini_api(
+                            file_bytes=file_bytes,
+                            mime_type=mime_type,
+                            filename=clean_fname,
+                            api_key=api_key
+                        )
+                        recs = gemini_converter.convert_gemini_response_to_yamato_records(
+                            gdata,
+                            filename=clean_fname
+                        )
+                        all_records.extend(recs)
+                elif not IS_CLOUD and HAS_LOCAL_OCR:
+                    # 本機環境且無 API Key：自動降級至 macOS 原生 Vision OCR
+                    saved_paths = []
+                    for clean_fname, file_bytes in uploaded_files:
+                        save_path = cdir / clean_fname
+                        with open(save_path, 'wb') as f:
+                            f.write(file_bytes)
+                        saved_paths.append(save_path)
+                    all_records = yamato_converter.convert_files_to_records(saved_paths)
+                else:
+                    self.send_json({
+                        "success": False, 
+                        "error": "請先輸入 Google Gemini API Key（可在左側輸入，或在 Vercel 環境變數中設定 GEMINI_API_KEY）。"
+                    }, status=400)
+                    return
                 
-                # 自動為該檔案在當前目錄匯出一份獨立 CSV
-                if len(uploaded_names) == 1:
-                    stem = Path(uploaded_names[0]).stem
-                    clean_stem = re.sub(r'[\s:]+', '_', stem)
-                    csv_path = cdir / f"黑貓出貨單_{clean_stem}.csv"
-                    yamato_converter.export_to_yamato_csv(records, csv_path)
+                # 若非雲端環境且只有單一檔案，儲存一份獨立 CSV 到工作目錄
+                if not IS_CLOUD and len(uploaded_names) == 1:
+                    try:
+                        stem = Path(uploaded_names[0]).stem
+                        clean_stem = re.sub(r'[\s:]+', '_', stem)
+                        csv_path = cdir / f"黑貓出貨單_{clean_stem}.csv"
+                        gemini_converter.export_records_to_csv_file(all_records, str(csv_path))
+                    except Exception as e:
+                        print("寫入單檔 CSV 失敗:", e)
                 
                 self.send_json({
                     "success": True,
                     "uploaded": uploaded_names,
-                    "records": records,
-                    "message": f"成功上傳並辨識 {len(uploaded_names)} 個檔案！"
+                    "records": all_records,
+                    "message": f"成功辨識 {len(uploaded_names)} 個檔案，共解析出 {len(all_records)} 筆訂單！"
                 })
             except Exception as e:
-                self.send_json({"success": False, "error": f"上傳辨識發生異常：{str(e)}"}, status=500)
+                self.send_json({"success": False, "error": f"辨識發生異常：{str(e)}"}, status=500)
             return
                 
         self.send_error(404, "Not Found")
@@ -1021,6 +1282,7 @@ def run_server():
     print(f"🚀 黑貓宅急便出貨單轉換系統已啟動！")
     print(f"🌐 本機操作網址：http://localhost:{PORT}")
     print(f"📁 當前工作目錄：{get_current_dir()}")
+    print(f"✨ 辨識引擎支援：Google Gemini 2.5 Flash API" + (" / macOS 原生 Vision" if HAS_LOCAL_OCR else ""))
     print("=" * 60)
     try:
         httpd.serve_forever()
